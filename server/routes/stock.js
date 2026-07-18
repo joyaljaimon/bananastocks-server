@@ -1,5 +1,6 @@
 import express from 'express'
 import { getStockData } from '../services/stockService.js'
+import { analyzeStock } from '../services/bananaAnalysis.js'
 
 const router = express.Router()
 
@@ -13,7 +14,8 @@ router.get('/:ticker', async (req, res) => {
 
   try {
     const data = await getStockData(ticker)
-    res.json(data)
+    const analysis = analyzeStock(data)
+    res.json({ ...data, analysis })
   } catch (error) {
     console.error('Error fetching stock data:', error.message)
     res.status(500).json({
