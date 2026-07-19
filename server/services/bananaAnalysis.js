@@ -71,8 +71,6 @@ export function analyzeStock(stockData) {
   const totalPoints = allScores.reduce((sum, s) => sum + s.points, 0)
   const bananaScore = Math.round(totalPoints * 10) / 10
 
-  // Only categorize AVAILABLE data as a strength or risk.
-  // Unavailable data is neither - it's just missing, not good or bad.
   const strengths = allScores
     .filter((s) => s.available && s.points >= 1.5)
     .map((s) => s.label)
@@ -90,6 +88,6 @@ export function analyzeStock(stockData) {
     subScores,
     strengths,
     risks,
-    dataGaps, // new: separate list for "we just don't know this"
+    dataGaps,
   }
 }
