@@ -1,4 +1,4 @@
-const BASE_URL = 'https://financialmodelingprep.com/stable'
+const BASE_URL = 'https://finnhub.io/api/v1'
 
 async function safeFetchJson(url, context) {
   const res = await fetch(url)
@@ -8,82 +8,87 @@ async function safeFetchJson(url, context) {
     return JSON.parse(text)
   } catch {
     throw new Error(
-      `FMP returned a non-JSON response for ${context}: "${text.slice(0, 100)}"`
+      `Finnhub returned a non-JSON response for ${context}: "${text.slice(0, 100)}"`
     )
   }
 }
 
 /**
- * Wraps an optional data fetch. If it fails (e.g. premium-restricted
- * endpoint for this ticker), logs a warning and returns null instead of
- * failing the entire stock lookup.
+ * Fetches and normalizes core financial data for a given ticker from Finnhub.
+ * Combines company profile + real-time quote + basic financials into one
+ * clean object matching our existing app-wide data shape.
  */
-async function safeOptionalFetch(url, context) {
-  try {
-    return await safeFetchJson(url, context)
-  } catch (err) {
-    console.warn(`Optional data unavailable (${context}): ${err.message}`)
-    return null
-  }
-}
-
 export async function getStockData(ticker) {
-  const apiKey = process.env.FMP_API_KEY
+  const apiKey = process.env.FINNHUB_API_KEY
 
   if (!apiKey) {
-    throw new Error('FMP_API_KEY is not set in environment variables')
+    throw new Error('FINNHUB_API_KEY is not set in environment variables')
   }
 
   const symbol = ticker.toUpperCase()
 
-  // Profile is REQUIRED - if this fails, the ticker truly doesn't exist
-  const profileData = await safeFetchJson(
-    `${BASE_URL}/profile?symbol=${symbol}&apikey=${apiKey}`,
+  // Company profile (name, industry, shares outstanding, market cap)
+  const profile = await safeFetchJson(
+    `${BASE_URL}/stock/profile2?symbol=${symbol}&token=${apiKey}`,
     'profile'
   )
 
-  if (!profileData || profileData.length === 0) {
+  if (!profile || Object.keys(profile).length === 0) {
     throw new Error(`No data found for ticker "${symbol}"`)
   }
 
-  const profile = profileData[0]
-
-  // Ratios and income statement are OPTIONAL - degrade gracefully if
-  // FMP restricts them for this particular ticker
-  const ratiosData = await safeOptionalFetch(
-    `${BASE_URL}/ratios?symbol=${symbol}&apikey=${apiKey}&limit=1`,
-    'ratios'
+  // Real-time quote (current price)
+  const quote = await safeFetchJson(
+    `${BASE_URL}/quote?symbol=${symbol}&token=${apiKey}`,
+    'quote'
   )
-  const ratios = ratiosData?.[0] || {}
 
-  const incomeData = await safeOptionalFetch(
-    `${BASE_URL}/income-statement?symbol=${symbol}&apikey=${apiKey}&limit=2`,
-    'income statement'
+  // Basic financials (all the ratios/margins/growth data)
+  const financials = await safeFetchJson(
+    `${BASE_URL}/stock/metric?symbol=${symbol}&metric=all&token=${apiKey}`,
+    'basic financials'
   )
-  const latestIncome = incomeData?.[0] || {}
-  const priorIncome = incomeData?.[1] || {}
+  const metric = financials?.metric || {}
 
-  let revenueGrowthPct = null
-  if (latestIncome.revenue && priorIncome.revenue) {
-    revenueGrowthPct =
-      (latestIncome.revenue - priorIncome.revenue) / priorIncome.revenue
-  }
+  // Finnhub gives per-share revenue (TTM) - multiply by shares outstanding
+  // to get a real dollar figure. shareOutstanding is in millions, so we
+  // multiply by 1,000,000 to get the raw share count first.
+  const sharesOutstanding = (profile.shareOutstanding ?? 0) * 1_000_000
+  const revenue =
+    metric.revenuePerShareTTM != null
+      ? metric.revenuePerShareTTM * sharesOutstanding
+      : null
+
+  const grossMarginPct =
+    metric.grossMarginTTM != null ? metric.grossMarginTTM / 100 : null
+  const netMarginPct =
+    metric.netProfitMarginTTM != null ? metric.netProfitMarginTTM / 100 : null
+  const revenueGrowthPct =
+    metric.revenueGrowthTTMYoy != null ? metric.revenueGrowthTTMYoy / 100 : null
+
+  const grossProfit =
+    revenue != null && grossMarginPct != null ? revenue * grossMarginPct : null
+  const netIncome =
+    revenue != null && netMarginPct != null ? revenue * netMarginPct : null
 
   return {
-    symbol: profile.symbol,
-    companyName: profile.companyName,
-    price: profile.price,
-    marketCap: profile.marketCap,
-    industry: profile.industry,
-    revenue: latestIncome.revenue ?? null,
-    grossProfit: latestIncome.grossProfit ?? null,
-    netIncome: latestIncome.netIncome ?? null,
+    symbol: profile.ticker,
+    companyName: profile.name,
+    price: quote?.c ?? null,
+    marketCap: (profile.marketCapitalization ?? 0) * 1_000_000,
+    industry: profile.finnhubIndustry ?? 'N/A',
+
+    revenue,
+    grossProfit,
+    netIncome,
     revenueGrowthPct,
-    grossMarginPct: ratios.grossProfitMargin ?? null,
-    netMarginPct: ratios.netProfitMargin ?? null,
-    debtToEquity: ratios.debtToEquityRatio ?? null,
-    currentRatio: ratios.currentRatio ?? null,
-    peRatio: ratios.priceToEarningsRatio ?? null,
-    priceToBook: ratios.priceToBookRatio ?? null,
+    grossMarginPct,
+    netMarginPct,
+
+    debtToEquity: metric['totalDebt/totalEquityAnnual'] ?? null,
+    currentRatio: metric.currentRatioQuarterly ?? null,
+
+    peRatio: metric.peTTM ?? null,
+    priceToBook: metric.pb ?? null,
   }
 }
