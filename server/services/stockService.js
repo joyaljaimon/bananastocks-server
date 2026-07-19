@@ -1,10 +1,5 @@
 const BASE_URL = 'https://financialmodelingprep.com/stable'
 
-/**
- * Safely fetches and parses JSON. If FMP returns plain text (e.g. a
- * "Premium Query Parameter" message instead of real data), this throws
- * a clean, readable error instead of crashing on JSON.parse.
- */
 async function safeFetchJson(url, context) {
   const res = await fetch(url)
   const text = await res.text()
@@ -18,6 +13,20 @@ async function safeFetchJson(url, context) {
   }
 }
 
+/**
+ * Wraps an optional data fetch. If it fails (e.g. premium-restricted
+ * endpoint for this ticker), logs a warning and returns null instead of
+ * failing the entire stock lookup.
+ */
+async function safeOptionalFetch(url, context) {
+  try {
+    return await safeFetchJson(url, context)
+  } catch (err) {
+    console.warn(`Optional data unavailable (${context}): ${err.message}`)
+    return null
+  }
+}
+
 export async function getStockData(ticker) {
   const apiKey = process.env.FMP_API_KEY
 
@@ -27,6 +36,7 @@ export async function getStockData(ticker) {
 
   const symbol = ticker.toUpperCase()
 
+  // Profile is REQUIRED - if this fails, the ticker truly doesn't exist
   const profileData = await safeFetchJson(
     `${BASE_URL}/profile?symbol=${symbol}&apikey=${apiKey}`,
     'profile'
@@ -38,13 +48,15 @@ export async function getStockData(ticker) {
 
   const profile = profileData[0]
 
-  const ratiosData = await safeFetchJson(
+  // Ratios and income statement are OPTIONAL - degrade gracefully if
+  // FMP restricts them for this particular ticker
+  const ratiosData = await safeOptionalFetch(
     `${BASE_URL}/ratios?symbol=${symbol}&apikey=${apiKey}&limit=1`,
     'ratios'
   )
   const ratios = ratiosData?.[0] || {}
 
-  const incomeData = await safeFetchJson(
+  const incomeData = await safeOptionalFetch(
     `${BASE_URL}/income-statement?symbol=${symbol}&apikey=${apiKey}&limit=2`,
     'income statement'
   )
