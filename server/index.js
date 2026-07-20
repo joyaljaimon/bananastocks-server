@@ -3,6 +3,7 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import healthRoute from './routes/health.js'
 import stockRoute from './routes/stock.js'
+import searchRoute from './routes/search.js'
 
 dotenv.config()
 
@@ -14,6 +15,7 @@ app.use(express.json())
 
 app.use('/api/health', healthRoute)
 app.use('/api/stock', stockRoute)
+app.use('/api/search', searchRoute)
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' })
